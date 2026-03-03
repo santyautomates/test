@@ -31,13 +31,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-adk
 
-      - name: Run ADK PR Reviewer
+      - name: Fetch PR Diff and Run ADK Reviewer
         id: run_agent
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          PR_CONTEXT: "The user has opened a pull request modifying Terraform files. Please suggest 3 GCP security improvements they should check for."
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed to fetch the diff
         run: |
-          # Run the script and save the output to a file
+          # Fetch the diff for this specific PR and save it to a file
+          gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
+          
+          # Run the script (which will now read pr_diff.txt)
           python ai_reviewer.py > ai_review.md
           
       - name: Post AI Review as PR Comment
