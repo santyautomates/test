@@ -8,26 +8,31 @@ terraform {
 }
 
 provider "google" {
-  project = "my-test-gcp-project-123"
+  project = aimlexplore"
   region  = "us-central1"
 }
 
-# A basic GCS bucket with several intentional missing best practices
-resource "google_storage_bucket" "app_data" {
-  name          = "company-app-data-bucket-test-001"
-  location      = "US"
-  
-  # AI should flag this: force_destroy is highly dangerous for production data
-  force_destroy = true 
+resource "google_storage_bucket" "secure_bucket" {
+  name                        = "my-secure-bucket-001-unique"
+  location                    = "US"
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = false
 
-  # AI should notice these are missing:
-  # - uniform_bucket_level_access
-  # - public_access_prevention
-  # - versioning block
+  versioning {
+    enabled = true
+  }
+
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      age = 365
+    }
+  }
+
+  encryption {
+    default_kms_key_name = null
+  }
 }
-
-# Intentional critical security flaw: Granting public read access
-resource "google_sorage_bucket_iam_member" "public_read" {
-  bucket = google_storage_bucket.app_data.name
-  role   = "roles/storage.objectViewer"
-  member = "allUsers"
