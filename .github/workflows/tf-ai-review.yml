@@ -1,86 +1,98 @@
-name: GCP Terraform AI Reviewer
+name: Terraform MCP + AI Validation
 
 on:
   pull_request:
     paths:
-      - '**/*.tf'
+      - '**.tf'
+      - '.github/workflows/terraform-mcp.yml'
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
 
 jobs:
-  ai-review:
+  validate:
+    name: Validate Terraform + AI Review
     runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      contents: read
 
     steps:
-      # -------------------------------------------------------
-      # 1. Checkout
-      # -------------------------------------------------------
-      - name: Checkout Repository
+      # ---------------------------------------------------
+      # CHECKOUT
+      # ---------------------------------------------------
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # -------------------------------------------------------
-      # 2. Node.js — required for npx terraform-mcp-server
-      # -------------------------------------------------------
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      # ---------------------------------------------------
+      # SETUP TERRAFORM
+      # ---------------------------------------------------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
         with:
-          node-version: '20'
+          terraform_version: 1.13.4
 
-      # -------------------------------------------------------
-      # 3. Python
-      # -------------------------------------------------------
-      - name: Set up Python
+      - name: Terraform Init
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      # ---------------------------------------------------
+      # START MCP SERVER (Docker)
+      # ---------------------------------------------------
+      - name: Start Terraform MCP Server
+        id: mcp-server
+        run: |
+          if ! command -v docker &> /dev/null; then
+            echo "mcp_available=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if docker pull hashicorp/terraform-mcp-server:latest; then
+            echo "mcp_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "mcp_available=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ---------------------------------------------------
+      # SETUP PYTHON FOR AI
+      # ---------------------------------------------------
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
-      # -------------------------------------------------------
-      # 4. Python dependencies
-      # -------------------------------------------------------
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade google-adk
-          pip install --upgrade google-generativeai
+          pip install --upgrade google-adk google-generativeai
 
-      # -------------------------------------------------------
-      # 5. Install GitHub CLI (usually pre-installed, but just in case)
-      # -------------------------------------------------------
+      # ---------------------------------------------------
+      # FETCH PR DIFF
+      # ---------------------------------------------------
       - name: Install GitHub CLI
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gh
+        run: sudo apt-get install gh -y
 
-      # -------------------------------------------------------
-      # 6. Fetch the PR diff into pr_diff.txt
-      # -------------------------------------------------------
       - name: Fetch PR Diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
-          echo "Diff size: $(wc -l < pr_diff.txt) lines"
 
-      # -------------------------------------------------------
-      # 7. Run AI Reviewer
-      #    continue-on-error: true so the comment step always runs
-      #    even when the agent exits with code 1 ([REJECTED])
-      # -------------------------------------------------------
-      - name: Run AI Reviewer
-        id: ai_step
-        continue-on-error: true
+      # ---------------------------------------------------
+      # RUN AI REVIEW
+      # ---------------------------------------------------
+      - name: Run AI Terraform Reviewer
+        id: ai-review
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python ai_reviewer.py > ai_review.md 2>&1
-          echo "Exit code: $?"
-          echo "--- ai_review.md ---"
-          cat ai_review.md
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
 
-      # -------------------------------------------------------
-      # 8. Post or update a sticky comment on the PR
-      # -------------------------------------------------------
+      # ---------------------------------------------------
+      # COMMENT ON PR
+      # ---------------------------------------------------
       - name: Post AI Review Comment
         if: always()
         uses: marocchino/sticky-pull-request-comment@v2
@@ -88,12 +100,13 @@ jobs:
           header: terraform-ai-review
           path: ai_review.md
 
-      # -------------------------------------------------------
-      # 9. Fail the job if the AI rejected the PR
-      #    (the comment was already posted above)
-      # -------------------------------------------------------
-      - name: Fail if Rejected
-        if: steps.ai_step.outcome == 'failure'
+      # ---------------------------------------------------
+      # FAIL PIPELINE IF AI REJECTED
+      # ---------------------------------------------------
+      - name: Enforce AI Gate
+        if: always()
         run: |
-          echo "AI Reviewer rejected this PR. See the PR comment for details."
-          exit 1
+          if grep -q "\[REJECTED\]" ai_review.md; then
+            echo "AI rejected the Terraform changes."
+            exit 1
+          fi
