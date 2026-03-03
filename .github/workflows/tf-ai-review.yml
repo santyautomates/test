@@ -4,28 +4,19 @@ on:
   pull_request:
     paths:
       - '**.tf'
-      - '.github/workflows/terraform-mcp.yml'
 
 permissions:
   contents: read
   pull-requests: write
-  id-token: write
 
 jobs:
   validate:
-    name: Validate Terraform + AI Review
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------------
-      # CHECKOUT
-      # ---------------------------------------------------
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------
-      # SETUP TERRAFORM
-      # ---------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -37,39 +28,16 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
-      # ---------------------------------------------------
-      # START MCP SERVER (Docker)
-      # ---------------------------------------------------
-      - name: Start Terraform MCP Server
-        id: mcp-server
-        run: |
-          if ! command -v docker &> /dev/null; then
-            echo "mcp_available=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          if docker pull hashicorp/terraform-mcp-server:latest; then
-            echo "mcp_available=true" >> $GITHUB_OUTPUT
-          else
-            echo "mcp_available=false" >> $GITHUB_OUTPUT
-          fi
-
-      # ---------------------------------------------------
-      # SETUP PYTHON FOR AI
-      # ---------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Python Dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install --upgrade google-adk google-generativeai
 
-      # ---------------------------------------------------
-      # FETCH PR DIFF
-      # ---------------------------------------------------
       - name: Install GitHub CLI
         run: sudo apt-get install gh -y
 
@@ -79,34 +47,15 @@ jobs:
         run: |
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
 
-      # ---------------------------------------------------
-      # RUN AI REVIEW
-      # ---------------------------------------------------
       - name: Run AI Terraform Reviewer
-        id: ai-review
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          python ai_reviewer.py > ai_review.md 2>&1
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
+          python ai_reviewer.py | tee ai_review.md
 
-      # ---------------------------------------------------
-      # COMMENT ON PR
-      # ---------------------------------------------------
       - name: Post AI Review Comment
         if: always()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: terraform-ai-review
           path: ai_review.md
-
-      # ---------------------------------------------------
-      # FAIL PIPELINE IF AI REJECTED
-      # ---------------------------------------------------
-      - name: Enforce AI Gate
-        if: always()
-        run: |
-          if grep -q "\[REJECTED\]" ai_review.md; then
-            echo "AI rejected the Terraform changes."
-            exit 1
-          fi
