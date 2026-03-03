@@ -26,24 +26,28 @@ async def main():
 
         # =====================================================
         # MCP CONNECTION (Terraform MCP via npx)
+        # NOTE: McpToolset does NOT support async context manager in this ADK version
+        # Use get_tools() directly instead
         # =====================================================
-        terraform_connection = StdioConnectionParams(
-            server_params={
-                "command": "npx",
-                "args": ["-y", "@hashicorp/terraform-mcp-server"],
-            }
+        terraform_toolset = McpToolset(
+            connection_params=StdioConnectionParams(
+                server_params={
+                    "command": "npx",
+                    "args": ["-y", "@hashicorp/terraform-mcp-server"],
+                }
+            )
         )
 
-        # McpToolset must be used as an async context manager
-        async with McpToolset(connection_params=terraform_connection) as terraform_tools:
+        # Fetch tools list from the MCP server
+        terraform_tools, _ = await terraform_toolset.get_tools()
 
-            # =====================================================
-            # AI REVIEWER AGENT
-            # =====================================================
-            reviewer_agent = Agent(
-                name="GCP_PR_Reviewer",
-                model="gemini-2.5-flash",
-                instruction="""
+        # =====================================================
+        # AI REVIEWER AGENT
+        # =====================================================
+        reviewer_agent = Agent(
+            name="GCP_PR_Reviewer",
+            model="gemini-2.5-flash",
+            instruction="""
 You are an expert Google Cloud Platform (GCP) Security Architect.
 You are reviewing Terraform code changes provided as a git diff.
 
@@ -64,51 +68,51 @@ If everything looks correct and secure:
 
 Always be specific and reference the actual diff content in your review.
 """,
-                tools=[terraform_tools],
-            )
+            tools=terraform_tools,
+        )
 
-            # =====================================================
-            # BUILD PROMPT
-            # =====================================================
-            prompt_text = f"""
+        # =====================================================
+        # BUILD PROMPT
+        # =====================================================
+        prompt_text = f"""
 Please review the following Terraform git diff for GCP security issues,
 syntax errors, bad practices, and architectural concerns:
 
 {diff_content}
 """
 
-            # =====================================================
-            # RUN AGENT (async)
-            # =====================================================
-            runner = InMemoryRunner(agent=reviewer_agent)
+        # =====================================================
+        # RUN AGENT (async)
+        # =====================================================
+        runner = InMemoryRunner(agent=reviewer_agent)
 
-            full_response = ""
+        full_response = ""
 
-            async for event in runner.run(
-                user_id="github",
-                session_id="pr_review",
-                new_message=prompt_text,
-            ):
-                if hasattr(event, "is_final_response") and event.is_final_response():
-                    if event.content and event.content.parts:
-                        full_response = event.content.parts[0].text
-                        break  # We have what we need
+        async for event in runner.run(
+            user_id="github",
+            session_id="pr_review",
+            new_message=prompt_text,
+        ):
+            if hasattr(event, "is_final_response") and event.is_final_response():
+                if event.content and event.content.parts:
+                    full_response = event.content.parts[0].text
+                    break
 
-            # =====================================================
-            # VALIDATE RESPONSE
-            # =====================================================
-            if not full_response.strip():
-                print("## ⚠️ AI returned an empty response. This may be a quota or API key issue.")
-                sys.exit(1)
+        # =====================================================
+        # VALIDATE RESPONSE
+        # =====================================================
+        if not full_response.strip():
+            print("## ⚠️ AI returned an empty response. This may be a quota or API key issue.")
+            sys.exit(1)
 
-            # Print response — this becomes the PR comment via ai_review.md
-            print(full_response)
+        # Print response — this becomes the PR comment via ai_review.md
+        print(full_response)
 
-            # =====================================================
-            # GATEKEEPER — exit 1 blocks the PR merge
-            # =====================================================
-            if "[REJECTED]" in full_response.upper():
-                sys.exit(1)
+        # =====================================================
+        # GATEKEEPER — exit 1 blocks the PR merge
+        # =====================================================
+        if "[REJECTED]" in full_response.upper():
+            sys.exit(1)
 
     except Exception:
         print("## ⚠️ AI Reviewer crashed with an unexpected error:\n")
