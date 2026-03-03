@@ -16,10 +16,9 @@ def main():
     try:
         terraform_tools = McpToolset(connection_params=terraform_connection)
     except Exception as e:
-        print(f"Failed to initialize MCP toolset: {e}", file=sys.stderr)
+        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}")
         sys.exit(1)
 
-    # 1. Update the instructions to force a PASS/FAIL decision
     reviewer_agent = Agent(
         name="GCP_PR_Reviewer",
         model="gemini-2.5-pro",
@@ -62,12 +61,17 @@ def main():
                  print(full_response)
         elif hasattr(event, 'actions') and getattr(event.actions, 'escalate', None):
              print(f"## ⚠️ AI Error\n{getattr(event, 'error_message', 'Unknown error')}")
-             sys.exit(1) # Fail the CI pipeline if the agent errors out
+             sys.exit(1)
 
-    # 2. The Gatekeeper Logic: Check if the AI rejected the code
+    # 1. THE SAFETY NET: Prevent empty files
+    if not full_response.strip():
+        print("## ⚠️ AI Review Error\nThe agent failed to generate a review. The response was empty.")
+        sys.exit(1)
+
+    # 2. THE GATEKEEPER: Check if the AI rejected the code
     if "[REJECTED]" in full_response.upper():
         print("\n\nReview complete. Errors found. Failing the pipeline.", file=sys.stderr)
-        sys.exit(1) # This tells GitHub Actions to show a RED X and block the PR
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
