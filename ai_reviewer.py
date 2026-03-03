@@ -11,10 +11,17 @@ from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 async def main():
     try:
         # =====================================================
-        # LOAD PR DIFF FIRST (fail fast before spinning up MCP)
+        # CHECK GOOGLE API KEY
+        # =====================================================
+        if not os.getenv("GOOGLE_API_KEY"):
+            print("## ⚠️ GOOGLE_API_KEY is not set.")
+            sys.exit(1)
+
+        # =====================================================
+        # LOAD PR DIFF FIRST (fail fast)
         # =====================================================
         if not os.path.exists("pr_diff.txt"):
-            print("## ⚠️ No PR diff found. Expected a file named `pr_diff.txt`.")
+            print("## ⚠️ No PR diff found. Expected file `pr_diff.txt`.")
             sys.exit(1)
 
         with open("pr_diff.txt", "r") as f:
@@ -25,28 +32,35 @@ async def main():
             sys.exit(1)
 
         # =====================================================
-        # MCP CONNECTION (Terraform MCP via npx)
-        # NOTE: McpToolset does NOT support async context manager in this ADK version
-        # Use get_tools() directly instead
+        # START MCP TOOLSET (Terraform MCP via npx)
         # =====================================================
-        terraform_toolset = McpToolset(
-            connection_params=StdioConnectionParams(
-                server_params={
-                    "command": "npx",
-                    "args": ["-y", "@hashicorp/terraform-mcp-server"],
-                }
+        terraform_tools = []
+
+        try:
+            terraform_toolset = McpToolset(
+                connection_params=StdioConnectionParams(
+                    server_params={
+                        "command": "npx",
+                        "args": ["-y", "hashicorp/terraform-mcp-server"],
+                    }
+                )
             )
-        )
 
-        # Fetch tools list from the MCP server
-        terraform_tools, _ = await terraform_toolset.get_tools()
+            terraform_tools, _ = await terraform_toolset.get_tools()
+
+        except Exception:
+            print("## ⚠️ MCP server failed to start. Continuing without MCP tools.\n")
+            print("```")
+            print(traceback.format_exc())
+            print("```")
+            terraform_tools = []
 
         # =====================================================
-        # AI REVIEWER AGENT
+        # CREATE AI AGENT
         # =====================================================
         reviewer_agent = Agent(
             name="GCP_PR_Reviewer",
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",  # safer default for CI
             instruction="""
 You are an expert Google Cloud Platform (GCP) Security Architect.
 You are reviewing Terraform code changes provided as a git diff.
@@ -66,7 +80,7 @@ If everything looks correct and secure:
 1. Start your response with EXACTLY: [APPROVED]
 2. Briefly explain why the changes are acceptable.
 
-Always be specific and reference the actual diff content in your review.
+Always reference the actual diff content in your review.
 """,
             tools=terraform_tools,
         )
@@ -82,7 +96,7 @@ syntax errors, bad practices, and architectural concerns:
 """
 
         # =====================================================
-        # RUN AGENT (async)
+        # RUN AGENT (ASYNC)
         # =====================================================
         runner = InMemoryRunner(agent=reviewer_agent)
 
@@ -102,20 +116,20 @@ syntax errors, bad practices, and architectural concerns:
         # VALIDATE RESPONSE
         # =====================================================
         if not full_response.strip():
-            print("## ⚠️ AI returned an empty response. This may be a quota or API key issue.")
+            print("## ⚠️ AI returned empty response. Possible API quota or model issue.")
             sys.exit(1)
 
-        # Print response — this becomes the PR comment via ai_review.md
+        # Print response → becomes PR comment
         print(full_response)
 
         # =====================================================
-        # GATEKEEPER — exit 1 blocks the PR merge
+        # GATEKEEPER (FAIL PR IF REJECTED)
         # =====================================================
         if "[REJECTED]" in full_response.upper():
             sys.exit(1)
 
     except Exception:
-        print("## ⚠️ AI Reviewer crashed with an unexpected error:\n")
+        print("## ⚠️ AI Reviewer crashed unexpectedly:\n")
         print("```")
         print(traceback.format_exc())
         print("```")
