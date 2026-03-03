@@ -1,5 +1,6 @@
 import os
 import sys
+import traceback
 
 from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
@@ -7,29 +8,26 @@ from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 
 
 def main():
-    # =====================================================
-    # MCP CONNECTION (Terraform MCP via npx)
-    # =====================================================
-    terraform_connection = StdioConnectionParams(
-        server_params={
-            "command": "npx",
-            "args": ["-y", "hashicorp/terraform-mcp-server"]
-        }
-    )
-
     try:
-        terraform_tools = McpToolset(connection_params=terraform_connection)
-    except Exception as e:
-        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}")
-        sys.exit(1)
+        # =====================================================
+        # MCP CONNECTION (Terraform MCP via npx)
+        # =====================================================
+        terraform_connection = StdioConnectionParams(
+            server_params={
+                "command": "npx",
+                "args": ["-y", "hashicorp/terraform-mcp-server"],
+            }
+        )
 
-    # =====================================================
-    # AI REVIEWER AGENT
-    # =====================================================
-    reviewer_agent = Agent(
-        name="GCP_PR_Reviewer",
-        model="gemini-2.5-pro",
-        instruction="""
+        terraform_tools = McpToolset(connection_params=terraform_connection)
+
+        # =====================================================
+        # AI REVIEWER AGENT
+        # =====================================================
+        reviewer_agent = Agent(
+            name="GCP_PR_Reviewer",
+            model="gemini-2.5-pro",
+            instruction="""
 You are an expert Google Cloud Platform (GCP) Security Architect.
 
 You are reviewing Terraform code changes provided as a git diff.
@@ -49,60 +47,60 @@ If everything looks correct and secure:
 1. Start your response with EXACTLY: [APPROVED]
 2. Briefly explain why.
 """,
-        tools=[terraform_tools],
-    )
+            tools=[terraform_tools],
+        )
 
-    # =====================================================
-    # LOAD PR DIFF
-    # =====================================================
-    diff_content = "No diff provided."
+        # =====================================================
+        # LOAD PR DIFF
+        # =====================================================
+        if not os.path.exists("pr_diff.txt"):
+            print("## ⚠️ No PR diff found.")
+            sys.exit(1)
 
-    if os.path.exists("pr_diff.txt"):
         with open("pr_diff.txt", "r") as f:
             diff_content = f.read()
 
-    prompt_text = f"""
+        if not diff_content.strip():
+            print("## ⚠️ PR diff is empty.")
+            sys.exit(1)
+
+        prompt_text = f"""
 Please review the following Terraform git diff:
 
 {diff_content}
 """
 
-    print("Agent is analyzing the git diff...", file=sys.stderr)
+        runner = InMemoryRunner(agent=reviewer_agent)
 
-    runner = InMemoryRunner(agent=reviewer_agent)
-
-    try:
         events = runner.run(
             user_id="github",
             session_id="pr_review",
-            new_message=prompt_text,  # string input (CI-safe)
+            new_message=prompt_text,
         )
-    except Exception as e:
-        print(f"## ⚠️ AI Runtime Error\n{e}")
-        sys.exit(1)
 
-    # =====================================================
-    # COLLECT FINAL RESPONSE
-    # =====================================================
-    full_response = ""
+        full_response = ""
 
-    for event in events:
-        if hasattr(event, "is_final_response") and event.is_final_response():
-            if hasattr(event, "content") and event.content and event.content.parts:
-                full_response = event.content.parts[0].text
+        for event in events:
+            if hasattr(event, "is_final_response") and event.is_final_response():
+                if event.content and event.content.parts:
+                    full_response = event.content.parts[0].text
 
-    if not full_response.strip():
-        print("## ⚠️ AI Review Error\nThe agent returned an empty response.")
-        sys.exit(1)
+        if not full_response.strip():
+            print("## ⚠️ AI returned empty response.")
+            sys.exit(1)
 
-    # Print response (this goes into ai_review.md)
-    print(full_response)
+        # Print response (this becomes PR comment)
+        print(full_response)
 
-    # =====================================================
-    # GATEKEEPER LOGIC
-    # =====================================================
-    if "[REJECTED]" in full_response.upper():
-        print("\nErrors detected. Failing pipeline.", file=sys.stderr)
+        # =====================================================
+        # GATEKEEPER
+        # =====================================================
+        if "[REJECTED]" in full_response.upper():
+            sys.exit(1)
+
+    except Exception:
+        print("## ⚠️ AI crashed\n")
+        print(traceback.format_exc())
         sys.exit(1)
 
 
