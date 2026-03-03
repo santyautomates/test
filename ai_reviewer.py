@@ -1,13 +1,15 @@
 import os
 import sys
+import asyncio
 import traceback
 
 from google.adk.agents import Agent
 from google.adk.runners import InMemoryRunner
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
+from google.adk.messages import UserMessage
 
 
-def main():
+async def main():
     try:
         if not os.getenv("GOOGLE_API_KEY"):
             print("## ⚠️ GOOGLE_API_KEY is not set.")
@@ -24,32 +26,30 @@ def main():
             print("## ⚠️ PR diff is empty.")
             sys.exit(1)
 
-        # ✅ USE DOCKER MCP (NOT NPX)
-        terraform_tools = []
-        try:
-            terraform_toolset = McpToolset(
-                connection_params=StdioConnectionParams(
-                    server_params={
-                        "command": "docker",
-                        "args": [
-                            "run",
-                            "-i",
-                            "--rm",
-                            "hashicorp/terraform-mcp-server:latest",
-                        ],
-                    }
-                )
+        # ✅ Use Docker MCP
+        terraform_toolset = McpToolset(
+            connection_params=StdioConnectionParams(
+                server_params={
+                    "command": "docker",
+                    "args": [
+                        "run",
+                        "-i",
+                        "--rm",
+                        "hashicorp/terraform-mcp-server:latest",
+                    ],
+                }
             )
+        )
 
-            terraform_tools, _ = terraform_toolset.get_tools()
-
+        try:
+            terraform_tools, _ = await terraform_toolset.get_tools()
         except Exception:
             print("⚠️ MCP failed. Continuing without MCP tools.")
             terraform_tools = []
 
         reviewer_agent = Agent(
             name="GCP_PR_Reviewer",
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             instruction="""
 You are a GCP Security Architect reviewing Terraform code.
 
@@ -78,11 +78,10 @@ Review this Terraform git diff:
 
         full_response = ""
 
-        # ✅ NORMAL LOOP (NOT ASYNC)
-        for event in runner.run(
+        async for event in runner.run(
             user_id="github",
             session_id="pr_review",
-            new_message=prompt_text,
+            new_message=UserMessage(content=prompt_text),
         ):
             if hasattr(event, "is_final_response") and event.is_final_response():
                 if event.content and event.content.parts:
@@ -105,4 +104,4 @@ Review this Terraform git diff:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
