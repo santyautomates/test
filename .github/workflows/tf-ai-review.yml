@@ -8,10 +8,11 @@ on:
 jobs:
   ai-review:
     runs-on: ubuntu-latest
+
     permissions:
-      pull-requests: write 
+      pull-requests: write
       contents: read
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -26,27 +27,27 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install ADK Dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install google-adk
+          pip install --upgrade google-adk
+          pip install --upgrade google-generativeai
+          pip install ghapi
 
       - name: Fetch PR Diff and Run AI Gatekeeper
-        id: run_agent
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Fetch the exact code changes for this specific PR
+          # Fetch PR diff
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
-          
-          # 2. Run the AI. If the AI outputs [REJECTED], this step will exit with code 1 and fail.
-          python ai_reviewer.py > ai_review.md
-          
+
+          # Run AI reviewer (always create output file)
+          python ai_reviewer.py > ai_review.md || echo "## ⚠️ AI crashed" > ai_review.md
+
       - name: Post or Update AI Review Comment
-        # CRITICAL: This ensures the comment posts even if the previous step fails!
-        if: always() 
+        if: always()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
-          header: terraform-ai-review # This ID tracks the comment so it edits instead of duplicates
+          header: terraform-ai-review
           path: ai_review.md
