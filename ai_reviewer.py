@@ -1,6 +1,5 @@
 import os
 import sys
-import asyncio
 import traceback
 
 from google.adk.agents import Agent
@@ -8,101 +7,79 @@ from google.adk.runners import InMemoryRunner
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 
 
-async def main():
+def main():
     try:
-        # =====================================================
-        # CHECK GOOGLE API KEY
-        # =====================================================
         if not os.getenv("GOOGLE_API_KEY"):
             print("## ⚠️ GOOGLE_API_KEY is not set.")
             sys.exit(1)
 
-        # =====================================================
-        # LOAD PR DIFF FIRST (fail fast)
-        # =====================================================
         if not os.path.exists("pr_diff.txt"):
-            print("## ⚠️ No PR diff found. Expected file `pr_diff.txt`.")
+            print("## ⚠️ No PR diff found.")
             sys.exit(1)
 
         with open("pr_diff.txt", "r") as f:
             diff_content = f.read()
 
         if not diff_content.strip():
-            print("## ⚠️ PR diff is empty. Nothing to review.")
+            print("## ⚠️ PR diff is empty.")
             sys.exit(1)
 
-        # =====================================================
-        # START MCP TOOLSET (Terraform MCP via npx)
-        # =====================================================
+        # ✅ USE DOCKER MCP (NOT NPX)
         terraform_tools = []
-
         try:
             terraform_toolset = McpToolset(
                 connection_params=StdioConnectionParams(
                     server_params={
-                        "command": "npx",
-                        "args": ["-y", "hashicorp/terraform-mcp-server"],
+                        "command": "docker",
+                        "args": [
+                            "run",
+                            "-i",
+                            "--rm",
+                            "hashicorp/terraform-mcp-server:latest",
+                        ],
                     }
                 )
             )
 
-            terraform_tools, _ = await terraform_toolset.get_tools()
+            terraform_tools, _ = terraform_toolset.get_tools()
 
         except Exception:
-            print("## ⚠️ MCP server failed to start. Continuing without MCP tools.\n")
-            print("```")
-            print(traceback.format_exc())
-            print("```")
+            print("⚠️ MCP failed. Continuing without MCP tools.")
             terraform_tools = []
 
-        # =====================================================
-        # CREATE AI AGENT
-        # =====================================================
         reviewer_agent = Agent(
             name="GCP_PR_Reviewer",
-            model="gemini-1.5-flash",  # safer default for CI
+            model="gemini-2.5-flash",
             instruction="""
-You are an expert Google Cloud Platform (GCP) Security Architect.
-You are reviewing Terraform code changes provided as a git diff.
+You are a GCP Security Architect reviewing Terraform code.
 
-If you detect ANY of the following:
-- Terraform syntax errors
-- Misspelled resource blocks or invalid arguments
-- Security issues (public buckets, overly permissive IAM, open firewall rules, etc.)
-- Hardcoded secrets or credentials
-- Bad GCP architecture practices
+If you detect:
+- Syntax errors
+- Security risks
+- Public access
+- Hardcoded secrets
+- Overly permissive IAM
 
-You MUST:
-1. Start your response with EXACTLY: [REJECTED]
-2. Clearly explain each issue found with the relevant line/block from the diff.
+Start with EXACTLY: [REJECTED]
 
-If everything looks correct and secure:
-1. Start your response with EXACTLY: [APPROVED]
-2. Briefly explain why the changes are acceptable.
-
-Always reference the actual diff content in your review.
+If safe:
+Start with EXACTLY: [APPROVED]
 """,
             tools=terraform_tools,
         )
 
-        # =====================================================
-        # BUILD PROMPT
-        # =====================================================
         prompt_text = f"""
-Please review the following Terraform git diff for GCP security issues,
-syntax errors, bad practices, and architectural concerns:
+Review this Terraform git diff:
 
 {diff_content}
 """
 
-        # =====================================================
-        # RUN AGENT (ASYNC)
-        # =====================================================
         runner = InMemoryRunner(agent=reviewer_agent)
 
         full_response = ""
 
-        async for event in runner.run(
+        # ✅ NORMAL LOOP (NOT ASYNC)
+        for event in runner.run(
             user_id="github",
             session_id="pr_review",
             new_message=prompt_text,
@@ -112,29 +89,20 @@ syntax errors, bad practices, and architectural concerns:
                     full_response = event.content.parts[0].text
                     break
 
-        # =====================================================
-        # VALIDATE RESPONSE
-        # =====================================================
         if not full_response.strip():
-            print("## ⚠️ AI returned empty response. Possible API quota or model issue.")
+            print("## ⚠️ AI returned empty response.")
             sys.exit(1)
 
-        # Print response → becomes PR comment
         print(full_response)
 
-        # =====================================================
-        # GATEKEEPER (FAIL PR IF REJECTED)
-        # =====================================================
         if "[REJECTED]" in full_response.upper():
             sys.exit(1)
 
     except Exception:
-        print("## ⚠️ AI Reviewer crashed unexpectedly:\n")
-        print("```")
+        print("## ⚠️ AI crashed:\n")
         print(traceback.format_exc())
-        print("```")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
