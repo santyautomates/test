@@ -1,80 +1,110 @@
 import os
 import sys
+
 from google.adk.agents import Agent
-from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
-from mcp import StdioServerParameters
 from google.adk.runners import InMemoryRunner
-from google.adk.messages import UserMessage # <-- NEW: Import the Message class
+from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
+
 
 def main():
+    # =====================================================
+    # MCP CONNECTION (Terraform MCP via npx)
+    # =====================================================
     terraform_connection = StdioConnectionParams(
-        server_params=StdioServerParameters(
-            command="npx",
-            args=["-y", "hashicorp/terraform-mcp-server"]
-        )
+        server_params={
+            "command": "npx",
+            "args": ["-y", "hashicorp/terraform-mcp-server"]
+        }
     )
 
     try:
         terraform_tools = McpToolset(connection_params=terraform_connection)
     except Exception as e:
-        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}", file=sys.stderr)
+        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}")
         sys.exit(1)
 
+    # =====================================================
+    # AI REVIEWER AGENT
+    # =====================================================
     reviewer_agent = Agent(
         name="GCP_PR_Reviewer",
         model="gemini-2.5-pro",
         instruction="""
-        You are an expert Google Cloud Platform (GCP) Security Architect. 
-        Review the proposed Terraform code via a git diff using your MCP tools.
-        
-        If the code contains syntax errors, typos (like misspelled resource blocks), or security flaws:
-        1. You MUST include the exact word [REJECTED] at the top of your response.
-        2. Explain what is wrong.
-        
-        If the code is perfect:
-        1. You MUST include the exact word [APPROVED] at the top of your response.
-        """,
-        tools=[terraform_tools]
+You are an expert Google Cloud Platform (GCP) Security Architect.
+
+You are reviewing Terraform code changes provided as a git diff.
+
+If you detect:
+- Terraform syntax errors
+- Misspelled resource blocks
+- Invalid arguments
+- Security issues (public buckets, overly permissive IAM, etc.)
+- Bad GCP architecture practices
+
+You MUST:
+1. Start your response with EXACTLY: [REJECTED]
+2. Clearly explain the issues.
+
+If everything looks correct and secure:
+1. Start your response with EXACTLY: [APPROVED]
+2. Briefly explain why.
+""",
+        tools=[terraform_tools],
     )
 
+    # =====================================================
+    # LOAD PR DIFF
+    # =====================================================
     diff_content = "No diff provided."
+
     if os.path.exists("pr_diff.txt"):
         with open("pr_diff.txt", "r") as f:
             diff_content = f.read()
-    
+
+    prompt_text = f"""
+Please review the following Terraform git diff:
+
+{diff_content}
+"""
+
     print("Agent is analyzing the git diff...", file=sys.stderr)
-    
+
     runner = InMemoryRunner(agent=reviewer_agent)
-    
-    # NEW: Format the prompt text
-    prompt_text = f"Please review this Terraform git diff:\n\n{diff_content}"
-    
-    # NEW: Wrap the text in a UserMessage object so ADK doesn't crash
-    events = runner.run(
-        user_id="github", 
-        session_id="pr_review", 
-        new_message=UserMessage(content=prompt_text) 
-    )
-    
+
+    try:
+        events = runner.run(
+            user_id="github",
+            session_id="pr_review",
+            new_message=prompt_text,  # string input (CI-safe)
+        )
+    except Exception as e:
+        print(f"## ⚠️ AI Runtime Error\n{e}")
+        sys.exit(1)
+
+    # =====================================================
+    # COLLECT FINAL RESPONSE
+    # =====================================================
     full_response = ""
+
     for event in events:
-        if hasattr(event, 'is_final_response') and event.is_final_response():
-             if hasattr(event, 'content') and event.content and event.content.parts:
-                 full_response = event.content.parts[0].text
-                 print(full_response)
-        elif hasattr(event, 'actions') and getattr(event.actions, 'escalate', None):
-             print(f"## ⚠️ AI Error\n{getattr(event, 'error_message', 'Unknown error')}")
-             sys.exit(1)
+        if hasattr(event, "is_final_response") and event.is_final_response():
+            if hasattr(event, "content") and event.content and event.content.parts:
+                full_response = event.content.parts[0].text
 
-    # THE SAFETY NET
     if not full_response.strip():
-        print("## ⚠️ AI Review Error\nThe agent failed to generate a review. The response was empty.")
+        print("## ⚠️ AI Review Error\nThe agent returned an empty response.")
         sys.exit(1)
 
-    # THE GATEKEEPER
+    # Print response (this goes into ai_review.md)
+    print(full_response)
+
+    # =====================================================
+    # GATEKEEPER LOGIC
+    # =====================================================
     if "[REJECTED]" in full_response.upper():
-        print("\n\nReview complete. Errors found. Failing the pipeline.", file=sys.stderr)
+        print("\nErrors detected. Failing pipeline.", file=sys.stderr)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
