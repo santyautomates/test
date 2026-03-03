@@ -13,7 +13,7 @@ provider "google" {
 }
 
 resource "google_storage_bucket" "secure_bucket" {
-  name                        = "my-secure-bucket-001-unique"
+  name                        = "my-secure-bucket-001emfebfebfefb-unique"
   location                    = "US"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
