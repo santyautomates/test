@@ -32,18 +32,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install --upgrade google-adk
           pip install --upgrade google-generativeai
-          pip install ghapi
 
-      - name: Fetch PR Diff and Run AI Gatekeeper
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install gh -y
+
+      - name: Fetch PR Diff
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Fetch PR diff
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
 
-          # Run AI reviewer (always create output file)
-          python ai_reviewer.py > ai_review.md || echo "## ⚠️ AI crashed" > ai_review.md
+      - name: Run AI Reviewer
+        id: ai_step
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          python ai_reviewer.py > ai_review.md 2>&1
 
       - name: Post or Update AI Review Comment
         if: always()
