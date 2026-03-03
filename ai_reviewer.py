@@ -4,6 +4,7 @@ from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
 from mcp import StdioServerParameters
 from google.adk.runners import InMemoryRunner
+from google.adk.messages import UserMessage # <-- NEW: Import the Message class
 
 def main():
     terraform_connection = StdioConnectionParams(
@@ -16,7 +17,7 @@ def main():
     try:
         terraform_tools = McpToolset(connection_params=terraform_connection)
     except Exception as e:
-        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}")
+        print(f"## ⚠️ MCP Initialization Error\nFailed to start tools: {e}", file=sys.stderr)
         sys.exit(1)
 
     reviewer_agent = Agent(
@@ -41,16 +42,18 @@ def main():
         with open("pr_diff.txt", "r") as f:
             diff_content = f.read()
     
-    # Send status to stderr so it doesn't get put in the PR comment
     print("Agent is analyzing the git diff...", file=sys.stderr)
     
     runner = InMemoryRunner(agent=reviewer_agent)
-    prompt = f"Please review this Terraform git diff:\n\n{diff_content}"
     
+    # NEW: Format the prompt text
+    prompt_text = f"Please review this Terraform git diff:\n\n{diff_content}"
+    
+    # NEW: Wrap the text in a UserMessage object so ADK doesn't crash
     events = runner.run(
         user_id="github", 
         session_id="pr_review", 
-        new_message=prompt
+        new_message=UserMessage(content=prompt_text) 
     )
     
     full_response = ""
@@ -63,12 +66,12 @@ def main():
              print(f"## ⚠️ AI Error\n{getattr(event, 'error_message', 'Unknown error')}")
              sys.exit(1)
 
-    # 1. THE SAFETY NET: Prevent empty files
+    # THE SAFETY NET
     if not full_response.strip():
         print("## ⚠️ AI Review Error\nThe agent failed to generate a review. The response was empty.")
         sys.exit(1)
 
-    # 2. THE GATEKEEPER: Check if the AI rejected the code
+    # THE GATEKEEPER
     if "[REJECTED]" in full_response.upper():
         print("\n\nReview complete. Errors found. Failing the pipeline.", file=sys.stderr)
         sys.exit(1)
