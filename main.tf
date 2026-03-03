@@ -8,7 +8,7 @@ terraform {
 }
 
 provider "google" {
-  project = aimlexplore"
+  project = "aimlexplore"
   region  = "us-central1"
 }
 
