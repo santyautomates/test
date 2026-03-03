@@ -27,7 +27,8 @@ resource "google_storage_bucket" "app_data" {
 }
 
 # Intentional critical security flaw: Granting public read access
-resource "google_sorage_bucket_iam_member" "public_read" {
-  bucket = google_storage_bucket.app_data.name
+resource "google_storage_bucket_iam_member" "public_read" {
+  bucket = google_storage_bucket.my_bucket.name
   role   = "roles/storage.objectViewer"
   member = "allUsers"
+}
