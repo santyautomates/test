@@ -37,14 +37,14 @@ jobs:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Fetch the exact code changes
+          # 1. Fetch the exact code changes for this specific PR
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
           
-          # 2. Run the AI. If the AI outputs [REJECTED], this step will FAIL.
+          # 2. Run the AI. If the AI outputs [REJECTED], this step will exit with code 1 and fail.
           python ai_reviewer.py > ai_review.md
           
       - name: Post or Update AI Review Comment
-        # CRITICAL: This ensures the comment posts even if the AI rejected the code!
+        # CRITICAL: This ensures the comment posts even if the previous step fails!
         if: always() 
         uses: marocchino/sticky-pull-request-comment@v2
         with:
