@@ -8,52 +8,92 @@ on:
 jobs:
   ai-review:
     runs-on: ubuntu-latest
-
     permissions:
       pull-requests: write
       contents: read
 
     steps:
+      # -------------------------------------------------------
+      # 1. Checkout
+      # -------------------------------------------------------
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js (For MCP Server)
+      # -------------------------------------------------------
+      # 2. Node.js — required for npx terraform-mcp-server
+      # -------------------------------------------------------
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
+      # -------------------------------------------------------
+      # 3. Python
+      # -------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: Install Dependencies
+      # -------------------------------------------------------
+      # 4. Python dependencies
+      # -------------------------------------------------------
+      - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install --upgrade google-adk
           pip install --upgrade google-generativeai
 
+      # -------------------------------------------------------
+      # 5. Install GitHub CLI (usually pre-installed, but just in case)
+      # -------------------------------------------------------
       - name: Install GitHub CLI
         run: |
-          sudo apt-get update
-          sudo apt-get install gh -y
+          sudo apt-get update -qq
+          sudo apt-get install -y gh
 
+      # -------------------------------------------------------
+      # 6. Fetch the PR diff into pr_diff.txt
+      # -------------------------------------------------------
       - name: Fetch PR Diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
+          echo "Diff size: $(wc -l < pr_diff.txt) lines"
 
+      # -------------------------------------------------------
+      # 7. Run AI Reviewer
+      #    continue-on-error: true so the comment step always runs
+      #    even when the agent exits with code 1 ([REJECTED])
+      # -------------------------------------------------------
       - name: Run AI Reviewer
         id: ai_step
+        continue-on-error: true
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           python ai_reviewer.py > ai_review.md 2>&1
+          echo "Exit code: $?"
+          echo "--- ai_review.md ---"
+          cat ai_review.md
 
-      - name: Post or Update AI Review Comment
+      # -------------------------------------------------------
+      # 8. Post or update a sticky comment on the PR
+      # -------------------------------------------------------
+      - name: Post AI Review Comment
         if: always()
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: terraform-ai-review
           path: ai_review.md
+
+      # -------------------------------------------------------
+      # 9. Fail the job if the AI rejected the PR
+      #    (the comment was already posted above)
+      # -------------------------------------------------------
+      - name: Fail if Rejected
+        if: steps.ai_step.outcome == 'failure'
+        run: |
+          echo "AI Reviewer rejected this PR. See the PR comment for details."
+          exit 1
