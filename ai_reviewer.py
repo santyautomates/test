@@ -2,14 +2,17 @@ import os
 import sys
 from google.adk.agents import Agent
 from google.adk.tools.mcp_tool import McpToolset, StdioConnectionParams
+from mcp import StdioServerParameters
 
 def main():
     # 1. Connect to the MCP server using npx
+# Wrap the command and args inside StdioServerParameters
     terraform_connection = StdioConnectionParams(
-        command="npx",
-        args=["-y", "hashicorp/terraform-mcp-server"]
+        server_params=StdioServerParameters(
+            command="npx",
+            args=["-y", "hashicorp/terraform-mcp-server"]
+        )
     )
-
     try:
         terraform_tools = McpToolset(connection_params=terraform_connection)
     except Exception as e:
