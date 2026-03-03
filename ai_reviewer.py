@@ -26,7 +26,7 @@ def main():
         # =====================================================
         reviewer_agent = Agent(
             name="GCP_PR_Reviewer",
-            model="gemini-2.5-pro",
+            model="gemini-2.5-flash",
             instruction="""
 You are an expert Google Cloud Platform (GCP) Security Architect.
 
